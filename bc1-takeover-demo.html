@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BC1 — Codebase Takeover & Stabilization Audit</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c10;
+    --surface: #0e1318;
+    --surface2: #141b22;
+    --border: #1e2d3d;
+    --border2: #253545;
+    --accent: #00d4ff;
+    --accent2: #0099cc;
+    --green: #00e676;
+    --yellow: #ffca28;
+    --red: #ff5252;
+    --orange: #ff8c00;
+    --text: #e0eaf5;
+    --muted: #6b8599;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* NOISE OVERLAY */
+  body::before {
+    content:'';
+    position:fixed;inset:0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events:none; z-index:999;
+  }
+
+  /* SIDEBAR */
+  .sidebar {
+    position: fixed; left:0; top:0; bottom:0; width:220px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display:flex; flex-direction:column;
+    z-index: 100;
+    padding: 0;
+  }
+  .logo {
+    padding: 24px 20px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .logo-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.5px;
+  }
+  .logo-sub {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .nav { padding: 16px 0; flex:1; }
+  .nav-item {
+    display:flex; align-items:center; gap: 10px;
+    padding: 10px 20px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+    font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .nav-item:hover { color: var(--text); background: rgba(0,212,255,0.04); }
+  .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(0,212,255,0.07); }
+  .nav-dot { width:6px; height:6px; border-radius:50%; background: currentColor; flex-shrink:0; }
+
+  .sidebar-footer {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .status-pill {
+    display:inline-flex; align-items:center; gap:6px;
+    font-family: var(--mono); font-size:10px;
+    color: var(--green);
+    background: rgba(0,230,118,0.08);
+    border: 1px solid rgba(0,230,118,0.2);
+    padding: 4px 10px; border-radius: 20px;
+  }
+  .pulse { width:6px;height:6px;border-radius:50%;background:var(--green); animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* MAIN */
+  .main { margin-left: 220px; min-height: 100vh; }
+
+  /* SECTIONS */
+  .section { display:none; padding: 32px 36px; animation: fadeIn 0.25s ease; }
+  .section.active { display:block; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+
+  .section-header { margin-bottom: 28px; }
+  .section-label {
+    font-family: var(--mono); font-size:10px;
+    color: var(--accent); letter-spacing: 3px; text-transform:uppercase;
+    margin-bottom: 6px;
+  }
+  .section-title { font-size: 26px; font-weight:600; letter-spacing:-0.5px; }
+  .section-desc { color: var(--muted); font-size:14px; margin-top:6px; line-height:1.6; }
+
+  /* CARDS */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 22px;
+  }
+  .card-title {
+    font-family:var(--mono); font-size:10px;
+    text-transform:uppercase; letter-spacing:2px;
+    color: var(--muted); margin-bottom:12px;
+  }
+
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; }
+  .grid-4 { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+
+  /* OVERVIEW SECTION */
+  .health-score {
+    display:flex; align-items:center; gap: 24px;
+    padding: 28px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    border-left: 3px solid var(--yellow);
+  }
+  .score-ring {
+    width:80px;height:80px;
+    border-radius:50%;
+    background: conic-gradient(var(--yellow) 0deg, var(--yellow) 190deg, var(--border2) 190deg);
+    display:flex;align-items:center;justify-content:center;
+    flex-shrink:0;
+  }
+  .score-inner {
+    width:62px;height:62px;border-radius:50%;
+    background:var(--surface);
+    display:flex;align-items:center;justify-content:center;
+    flex-direction:column;
+  }
+  .score-val { font-family:var(--mono);font-size:20px;font-weight:700;color:var(--yellow); }
+  .score-label { font-family:var(--mono);font-size:8px;color:var(--muted); }
+  .score-info h3 { font-size:16px;font-weight:600; margin-bottom:4px; }
+  .score-info p { font-size:13px;color:var(--muted);line-height:1.5; }
+
+  .stat-card {
+    background: var(--surface); border:1px solid var(--border);
+    border-radius:8px; padding:18px 20px;
+    display:flex;flex-direction:column;gap:6px;
+  }
+  .stat-label { font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px; }
+  .stat-val { font-size:24px;font-weight:600;font-family:var(--mono); }
+  .stat-val.red { color:var(--red); }
+  .stat-val.yellow { color:var(--yellow); }
+  .stat-val.green { color:var(--green); }
+  .stat-val.blue { color:var(--accent); }
+  .stat-sub { font-size:12px;color:var(--muted); }
+
+  /* TIMELINE */
+  .timeline { display:flex;gap:0; margin-top:20px; }
+  .tl-week {
+    flex:1; padding:16px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    position:relative;
+  }
+  .tl-week:not(:last-child) { border-right:none; }
+  .tl-week:first-child { border-radius:8px 0 0 8px; }
+  .tl-week:last-child { border-radius:0 8px 8px 0; }
+  .tl-week.active-week { background: rgba(0,212,255,0.05); border-color:var(--accent); }
+  .tl-label { font-family:var(--mono);font-size:9px;color:var(--accent);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px; }
+  .tl-title { font-size:13px;font-weight:600;margin-bottom:8px; }
+  .tl-items { list-style:none; }
+  .tl-items li { font-size:11px;color:var(--muted);padding:2px 0;padding-left:12px;position:relative; }
+  .tl-items li::before { content:'—';position:absolute;left:0;color:var(--border2); }
+
+  /* ARCHITECTURE */
+  .arch-layer {
+    background:var(--surface);border:1px solid var(--border);
+    border-radius:8px;padding:16px 20px;margin-bottom:10px;
+  }
+  .arch-layer-label {
+    font-family:var(--mono);font-size:9px;letter-spacing:3px;
+    text-transform:uppercase;margin-bottom:12px;
+    display:flex;align-items:center;gap:8px;
+  }
+  .arch-badges { display:flex;flex-wrap:wrap;gap:8px; }
+  .badge {
+    font-family:var(--mono);font-size:10px;
+    padding:4px 10px;border-radius:4px;
+    border:1px solid;
+  }
+  .badge.blue { color:var(--accent);border-color:rgba(0,212,255,0.3);background:rgba(0,212,255,0.07); }
+  .badge.green { color:var(--green);border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.07); }
+  .badge.yellow { color:var(--yellow);border-color:rgba(255,202,40,0.3);background:rgba(255,202,40,0.07); }
+  .badge.orange { color:var(--orange);border-color:rgba(255,140,0,0.3);background:rgba(255,140,0,0.07); }
+  .badge.red { color:var(--red);border-color:rgba(255,82,82,0.3);background:rgba(255,82,82,0.07); }
+  .badge.purple { color:#b39ddb;border-color:rgba(179,157,219,0.3);background:rgba(179,157,219,0.07); }
+
+  /* COLD START */
+  .step-card {
+    display:flex;gap:18px;padding:18px 20px;
+    background:var(--surface);border:1px solid var(--border);
+    border-radius:8px;margin-bottom:10px;
+    transition: border-color 0.2s;
+  }
+  .step-card:hover { border-color:var(--border2); }
+  .step-num {
+    font-family:var(--mono);font-size:22px;font-weight:700;
+    color:var(--border2);flex-shrink:0;width:32px;
+    line-height:1;
+  }
+  .step-content h4 { font-size:14px;font-weight:600;margin-bottom:4px; }
+  .step-content p { font-size:12px;color:var(--muted);line-height:1.6; }
+  .step-tag { display:inline-block;margin-top:8px;font-family:var(--mono);font-size:10px;color:var(--accent);background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.2);padding:2px 8px;border-radius:3px; }
+
+  /* RISK REGISTER */
+  .risk-card {
+    background:var(--surface);border:1px solid var(--border);
+    border-radius:8px;padding:16px 18px;
+    border-left:3px solid var(--border);
+  }
+  .risk-card.high { border-left-color:var(--red); }
+  .risk-card.med { border-left-color:var(--yellow); }
+  .risk-card.low { border-left-color:var(--green); }
+  .risk-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:8px; }
+  .risk-title { font-size:13px;font-weight:600; }
+  .risk-badge { font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:3px;text-transform:uppercase;letter-spacing:1px; }
+  .risk-badge.high { color:var(--red);background:rgba(255,82,82,0.1);border:1px solid rgba(255,82,82,0.3); }
+  .risk-badge.med { color:var(--yellow);background:rgba(255,202,40,0.1);border:1px solid rgba(255,202,40,0.3); }
+  .risk-badge.low { color:var(--green);background:rgba(0,230,118,0.1);border:1px solid rgba(0,230,118,0.3); }
+  .risk-desc { font-size:12px;color:var(--muted);margin-bottom:8px;line-height:1.5; }
+  .risk-fix { font-family:var(--mono);font-size:10px;color:var(--muted); }
+  .risk-fix span { color:var(--accent); }
+
+  /* CODE BLOCKS */
+  .code-block {
+    background:#050810;
+    border:1px solid var(--border);
+    border-radius:6px;
+    padding:16px;
+    font-family:var(--mono);
+    font-size:11px;
+    line-height:1.7;
+    overflow-x:auto;
+    margin-top:12px;
+  }
+  .code-block .comment { color:#4a6275; }
+  .code-block .keyword { color:#ff79c6; }
+  .code-block .string { color:#f1fa8c; }
+  .code-block .value { color:#bd93f9; }
+  .code-block .key { color:var(--accent); }
+  .code-block .fn { color:var(--green); }
+
+  /* SECRETS FLOW */
+  .flow { display:flex;align-items:stretch;gap:0;margin-top:16px;flex-wrap:wrap; }
+  .flow-step {
+    flex:1;min-width:140px;
+    padding:16px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    position:relative;
+    text-align:center;
+  }
+  .flow-step:not(:last-child)::after {
+    content:'→';
+    position:absolute;right:-10px;top:50%;transform:translateY(-50%);
+    color:var(--accent);font-size:16px;z-index:2;
+  }
+  .flow-step:first-child { border-radius:8px 0 0 8px; }
+  .flow-step:last-child { border-radius:0 8px 8px 0; }
+  .flow-icon { font-size:20px;margin-bottom:6px; }
+  .flow-label { font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted); margin-bottom:4px; }
+  .flow-desc { font-size:11px;color:var(--text);line-height:1.4; }
+  .flow-step.danger { border-color:rgba(255,82,82,0.4);background:rgba(255,82,82,0.04); }
+  .flow-step.safe { border-color:rgba(0,230,118,0.3);background:rgba(0,230,118,0.04); }
+
+  /* CICD */
+  .pipeline { display:flex;flex-direction:column;gap:8px; }
+  .pipeline-stage {
+    display:flex;align-items:center;gap:12px;
+    padding:12px 16px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:6px;
+  }
+  .ps-status { width:8px;height:8px;border-radius:50%;flex-shrink:0; }
+  .ps-status.ok { background:var(--green); }
+  .ps-status.warn { background:var(--yellow); }
+  .ps-status.fail { background:var(--red); }
+  .ps-name { font-family:var(--mono);font-size:12px;font-weight:500;flex:1; }
+  .ps-time { font-family:var(--mono);font-size:10px;color:var(--muted); }
+  .ps-tag { font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:3px; }
+
+  /* OBSERVABILITY */
+  .log-stream {
+    background:#050810;
+    border:1px solid var(--border);
+    border-radius:6px;
+    padding:12px 14px;
+    font-family:var(--mono);
+    font-size:11px;
+    line-height:1.8;
+    height:200px;
+    overflow-y:auto;
+  }
+  .log-ts { color:#4a6275; }
+  .log-info { color:var(--accent); }
+  .log-warn { color:var(--yellow); }
+  .log-error { color:var(--red); }
+  .log-ok { color:var(--green); }
+
+  /* DOCS */
+  .doc-card {
+    padding:14px 16px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:8px;
+    cursor:default;
+    transition:border-color 0.15s;
+  }
+  .doc-card:hover { border-color:var(--border2); }
+  .doc-icon { font-size:18px;margin-bottom:8px; }
+  .doc-title { font-size:13px;font-weight:600;margin-bottom:4px; }
+  .doc-status { font-family:var(--mono);font-size:10px; }
+
+  /* DIVIDER */
+  .divider { height:1px;background:var(--border);margin:24px 0; }
+
+  /* AUDIT SUMMARY */
+  .audit-box {
+    background:#050810;
+    border:1px solid var(--border);
+    border-left:3px solid var(--accent);
+    border-radius:8px;
+    padding:20px 24px;
+  }
+  .audit-box h4 { font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:12px; }
+  .audit-box p { font-size:13px;color:var(--text);line-height:1.8; }
+  .audit-box p + p { margin-top:10px; }
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="logo">
+    <div class="logo-tag">BetterCity One</div>
+    <div class="logo-title">BC1 Takeover</div>
+    <div class="logo-sub">v0.1 — Audit Phase</div>
+  </div>
+  <div class="nav">
+    <div class="nav-item active" onclick="show('overview',this)"><span class="nav-dot"></span>Overview</div>
+    <div class="nav-item" onclick="show('arch',this)"><span class="nav-dot"></span>Architecture</div>
+    <div class="nav-item" onclick="show('coldstart',this)"><span class="nav-dot"></span>Cold Start</div>
+    <div class="nav-item" onclick="show('risks',this)"><span class="nav-dot"></span>Risk Register</div>
+    <div class="nav-item" onclick="show('secrets',this)"><span class="nav-dot"></span>Secrets Safety</div>
+    <div class="nav-item" onclick="show('cicd',this)"><span class="nav-dot"></span>CI / CD</div>
+    <div class="nav-item" onclick="show('observability',this)"><span class="nav-dot"></span>Observability</div>
+    <div class="nav-item" onclick="show('docs',this)"><span class="nav-dot"></span>Documentation</div>
+  </div>
+  <div class="sidebar-footer">
+    <div class="status-pill"><span class="pulse"></span>Audit in Progress</div>
+  </div>
+</nav>
+
+<main class="main">
+
+  <!-- OVERVIEW -->
+  <section id="overview" class="section active">
+    <div class="section-header">
+      <div class="section-label">Section 01</div>
+      <div class="section-title">Executive Overview</div>
+      <div class="section-desc">Post-termination codebase takeover — Day 1 status for BetterCity One (BC1).</div>
+    </div>
+
+    <div class="health-score">
+      <div class="score-ring">
+        <div class="score-inner">
+          <div class="score-val">53</div>
+          <div class="score-label">/100</div>
+        </div>
+      </div>
+      <div class="score-info">
+        <h3>Codebase Health: Moderate Risk</h3>
+        <p>Platform is partially functional with critical security gaps, dependency drift, and undocumented service boundaries. Not production-stable without remediation. Forward development is blocked until secrets are rotated and deploy pipeline is validated.</p>
+      </div>
+    </div>
+
+    <div class="grid-4" style="margin-bottom:16px;">
+      <div class="stat-card">
+        <div class="stat-label">Critical Risks</div>
+        <div class="stat-val red">4</div>
+        <div class="stat-sub">Require immediate action</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Medium Risks</div>
+        <div class="stat-val yellow">7</div>
+        <div class="stat-sub">Address in weeks 1–2</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Services Mapped</div>
+        <div class="stat-val blue">6 / 9</div>
+        <div class="stat-sub">3 boundaries unclear</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">CI/CD Status</div>
+        <div class="stat-val yellow">Partial</div>
+        <div class="stat-sub">Deploy path unverified</div>
+      </div>
+    </div>
+
+    <div class="timeline">
+      <div class="tl-week active-week">
+        <div class="tl-label">Week 1</div>
+        <div class="tl-title">Audit & Secure</div>
+        <ul class="tl-items">
+          <li>Cold start & local boot</li>
+          <li>Secrets rotation</li>
+          <li>Dependency audit</li>
+          <li>Written risk report</li>
+          <li>CI/CD verification</li>
+        </ul>
+      </div>
+      <div class="tl-week">
+        <div class="tl-label">Week 2</div>
+        <div class="tl-title">Stabilize</div>
+        <ul class="tl-items">
+          <li>Fix critical risks</li>
+          <li>Health check repair</li>
+          <li>Broken migrations</li>
+          <li>Alert routing setup</li>
+          <li>Deploy validation</li>
+        </ul>
+      </div>
+      <div class="tl-week">
+        <div class="tl-label">Week 3</div>
+        <div class="tl-title">Document</div>
+        <ul class="tl-items">
+          <li>Architecture docs</li>
+          <li>OpenAPI contracts</li>
+          <li>Onboarding guide</li>
+          <li>Service runbooks</li>
+          <li>Risk backlog</li>
+        </ul>
+      </div>
+      <div class="tl-week">
+        <div class="tl-label">Week 4+</div>
+        <div class="tl-title">Forward Progress</div>
+        <ul class="tl-items">
+          <li>Feature development</li>
+          <li>Mobile API contracts</li>
+          <li>ClickUp integration</li>
+          <li>Colombia team onboard</li>
+          <li>Ongoing iteration</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+    <div class="audit-box">
+      <h4>Written Audit Summary — Day 1</h4>
+      <p>The BC1 platform was inherited from a terminated vendor with no documentation, no handoff call, and no README. The codebase spans Next.js 14 (App Router), a Python FastAPI backend, .NET Core microservices, and a PostgreSQL data layer deployed to AWS via ECS Fargate.</p>
+      <p>Initial review reveals hardcoded production credentials in at least two service layers, a CI/CD pipeline with unverified deploy targets, three backend services with undocumented inter-service dependencies, and no structured error handling or alert routing in CloudWatch. Test coverage is below 20% in backend services. The LL97 compliance module is partially wired and should not be treated as production-ready.</p>
+      <p>Immediate actions required: credential rotation, secrets migration to AWS Secrets Manager, CI/CD deploy path audit, health check fixes on ECS tasks. Once those are resolved, the platform can safely support active feature development alongside the Colombia-based team onboarding.</p>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section id="arch" class="section">
+    <div class="section-header">
+      <div class="section-label">Section 02</div>
+      <div class="section-title">System Architecture Map</div>
+      <div class="section-desc">Layered service map reconstructed via code inspection — no documentation existed at handoff.</div>
+    </div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label" style="color:var(--accent)">⬡ Frontend Layer</div>
+      <div class="arch-badges">
+        <span class="badge blue">Next.js 14 App Router</span>
+        <span class="badge blue">TypeScript 5.x</span>
+        <span class="badge blue">React</span>
+        <span class="badge blue">Node 20.x</span>
+        <span class="badge blue">Prisma / Drizzle ORM</span>
+        <span class="badge blue">CloudFront CDN</span>
+      </div>
+    </div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label" style="color:var(--green)">⬡ Backend Services</div>
+      <div class="arch-badges">
+        <span class="badge green">Python 3.12 + FastAPI</span>
+        <span class="badge green">.NET Core Microservices</span>
+        <span class="badge green">SQLAlchemy ORM</span>
+        <span class="badge green">REST / OpenAPI</span>
+        <span class="badge green">Swagger Docs</span>
+      </div>
+    </div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label" style="color:var(--yellow)">⬡ Data Layer</div>
+      <div class="arch-badges">
+        <span class="badge yellow">PostgreSQL 15</span>
+        <span class="badge yellow">S3 — Documents & Assets</span>
+        <span class="badge yellow">Migrations — Alembic</span>
+      </div>
+    </div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label" style="color:var(--orange)">⬡ Infrastructure — AWS</div>
+      <div class="arch-badges">
+        <span class="badge orange">ECS Fargate</span>
+        <span class="badge orange">EC2</span>
+        <span class="badge orange">Docker</span>
+        <span class="badge orange">Secrets Manager</span>
+        <span class="badge orange">SSM Parameter Store</span>
+        <span class="badge orange">CloudFront</span>
+        <span class="badge orange">IAM Task Roles</span>
+      </div>
+    </div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label" style="color:var(--red)">⬡ CI / CD & Monitoring</div>
+      <div class="arch-badges">
+        <span class="badge red">GitHub Actions</span>
+        <span class="badge red">CloudWatch Logs</span>
+        <span class="badge red">Sentry</span>
+        <span class="badge red">structlog / pino</span>
+        <span class="badge red">Jest / Vitest</span>
+        <span class="badge red">pytest</span>
+      </div>
+    </div>
+
+    <div class="arch-layer">
+      <div class="arch-layer-label" style="color:var(--muted)">⬡ Planned Integrations</div>
+      <div class="arch-badges">
+        <span class="badge purple">ClickUp API</span>
+        <span class="badge purple">SharePoint</span>
+        <span class="badge purple">React Native Mobile</span>
+        <span class="badge purple">Android / iOS</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- COLD START -->
+  <section id="coldstart" class="section">
+    <div class="section-header">
+      <div class="section-label">Section 03</div>
+      <div class="section-title">Cold Start Audit Workflow</div>
+      <div class="section-desc">How a senior engineer enters an unfamiliar codebase with no README and no one to ask.</div>
+    </div>
+
+    <div class="step-card">
+      <div class="step-num">01</div>
+      <div class="step-content">
+        <h4>Get the application running locally</h4>
+        <p>Clone the repo and attempt a full local boot. What breaks immediately tells you the state of the build chain, env dependencies, and runtime assumptions. Missing env vars, broken Docker builds, and failed migrations are all signal — not blockers.</p>
+        <span class="step-tag">signal: env gaps, broken deps, failing migrations</span>
+      </div>
+    </div>
+
+    <div class="step-card">
+      <div class="step-num">02</div>
+      <div class="step-content">
+        <h4>Map all services, packages, and external integrations</h4>
+        <p>Walk every directory. Enumerate repos, services, background workers, cron jobs, third-party API clients. Build a dependency inventory. Note what's internal vs external, what talks to AWS, what has no clear owner.</p>
+        <span class="step-tag">signal: service boundaries, integration points, hidden coupling</span>
+      </div>
+    </div>
+
+    <div class="step-card">
+      <div class="step-num">03</div>
+      <div class="step-content">
+        <h4>Inspect CI/CD, Docker, and infrastructure definitions</h4>
+        <p>Review every GitHub Actions workflow, Dockerfile, ECS task definition, and Terraform / CDK config. Understand how the app actually ships to production. Identify dead workflows, hardcoded image tags, missing rollback logic, and IAM gaps.</p>
+        <span class="step-tag">signal: deploy path, rollback capability, secrets exposure in CI</span>
+      </div>
+    </div>
+
+    <div class="step-card">
+      <div class="step-num">04</div>
+      <div class="step-content">
+        <h4>Trace one critical business flow end to end</h4>
+        <p>Pick the most business-critical user flow — project creation, LL97 report generation, EV charging audit — and trace it from UI click through API to database and back. Identify every service it touches, every env var it depends on, and every failure mode.</p>
+        <span class="step-tag">signal: runtime behavior, undocumented dependencies, fragile paths</span>
+      </div>
+    </div>
+
+    <div class="step-card">
+      <div class="step-num">05</div>
+      <div class="step-content">
+        <h4>Produce a risk-ranked written audit</h4>
+        <p>Document everything found — immediate risks (security, broken deploys), short-term fixes (test coverage, missing alerts), and deferred cleanup (refactors, technical debt). This becomes the single source of truth for the remediation plan and handoff to the Colombia-based team.</p>
+        <span class="step-tag">deliverable: written audit report + prioritized risk register</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- RISK REGISTER -->
+  <section id="risks" class="section">
+    <div class="section-header">
+      <div class="section-label">Section 04</div>
+      <div class="section-title">Risk Register</div>
+      <div class="section-desc">Risks identified during initial cold audit, ranked by severity and business impact.</div>
+    </div>
+
+    <div class="grid-2" style="margin-bottom:10px;">
+      <div class="risk-card high">
+        <div class="risk-header">
+          <div class="risk-title">Hardcoded Production Credentials</div>
+          <div class="risk-badge high">Critical</div>
+        </div>
+        <div class="risk-desc">Database passwords, API keys, and AWS credentials found directly in source code and CI workflow files. Any access to the repo = full production access.</div>
+        <div class="risk-fix">Fix: <span>Rotate immediately → migrate to Secrets Manager + SSM</span></div>
+      </div>
+      <div class="risk-card high">
+        <div class="risk-header">
+          <div class="risk-title">ECS Health Checks Failing</div>
+          <div class="risk-badge high">Critical</div>
+        </div>
+        <div class="risk-desc">Two ECS Fargate task definitions have misconfigured health check paths. Tasks are cycling or silently running in degraded state without alerting.</div>
+        <div class="risk-fix">Fix: <span>Correct health check endpoints + verify task role permissions</span></div>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-bottom:10px;">
+      <div class="risk-card high">
+        <div class="risk-header">
+          <div class="risk-title">Broken Database Migrations</div>
+          <div class="risk-badge high">Critical</div>
+        </div>
+        <div class="risk-desc">Three Alembic migrations are out of sequence. Schema state in staging diverges from production. Running a clean migration chain will fail without manual intervention.</div>
+        <div class="risk-fix">Fix: <span>Reconcile migration chain + snapshot prod schema</span></div>
+      </div>
+      <div class="risk-card high">
+        <div class="risk-header">
+          <div class="risk-title">No Rollback Logic in CI/CD</div>
+          <div class="risk-badge high">Critical</div>
+        </div>
+        <div class="risk-desc">GitHub Actions deploy workflow pushes directly to ECS with no automated rollback on health check failure. A bad deploy will silently degrade production.</div>
+        <div class="risk-fix">Fix: <span>Add health-gate + auto-rollback step to deploy workflow</span></div>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="risk-card med">
+        <div class="risk-header">
+          <div class="risk-title">Stale Dependencies</div>
+          <div class="risk-badge med">Medium</div>
+        </div>
+        <div class="risk-desc">14 npm packages and 6 Python packages are 2+ major versions behind with known CVEs.</div>
+        <div class="risk-fix">Fix: <span>Audit + incremental upgrade plan</span></div>
+      </div>
+      <div class="risk-card med">
+        <div class="risk-header">
+          <div class="risk-title">No CloudWatch Alarms</div>
+          <div class="risk-badge med">Medium</div>
+        </div>
+        <div class="risk-desc">Logs are flowing to CloudWatch but zero alarms are configured. No alerting on errors, latency, or task failures.</div>
+        <div class="risk-fix">Fix: <span>Define alarm baselines + SNS routing</span></div>
+      </div>
+      <div class="risk-card med">
+        <div class="risk-header">
+          <div class="risk-title">Undocumented .NET Services</div>
+          <div class="risk-badge med">Medium</div>
+        </div>
+        <div class="risk-desc">Three .NET Core microservices have no OpenAPI specs, no Swagger docs, and unclear ownership within the system.</div>
+        <div class="risk-fix">Fix: <span>Trace + document service contracts</span></div>
+      </div>
+      <div class="risk-card low">
+        <div class="risk-header">
+          <div class="risk-title">Test Coverage &lt; 20%</div>
+          <div class="risk-badge low">Low</div>
+        </div>
+        <div class="risk-desc">Backend service test coverage is minimal. Refactors and new features carry silent regression risk.</div>
+        <div class="risk-fix">Fix: <span>Coverage baseline + test plan for critical paths</span></div>
+      </div>
+      <div class="risk-card low">
+        <div class="risk-header">
+          <div class="risk-title">No Onboarding Documentation</div>
+          <div class="risk-badge low">Low</div>
+        </div>
+        <div class="risk-desc">No README, no architecture docs, no env setup guide. Colombia team cannot onboard without a written guide.</div>
+        <div class="risk-fix">Fix: <span>Create in Week 3 documentation sprint</span></div>
+      </div>
+      <div class="risk-card low">
+        <div class="risk-header">
+          <div class="risk-title">Mobile API Contracts Missing</div>
+          <div class="risk-badge low">Low</div>
+        </div>
+        <div class="risk-desc">Planned Android/iOS app has no defined API contracts. Mobile developer cannot start without OpenAPI specs.</div>
+        <div class="risk-fix">Fix: <span>OpenAPI export after service audit complete</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECRETS -->
+  <section id="secrets" class="section">
+    <div class="section-header">
+      <div class="section-label">Section 05</div>
+      <div class="section-title">Secrets & Production Safety</div>
+      <div class="section-desc">Exact remediation flow when hardcoded credentials are found in an inherited codebase.</div>
+    </div>
+
+    <div class="flow">
+      <div class="flow-step danger">
+        <div class="flow-icon">🔍</div>
+        <div class="flow-label">Detect</div>
+        <div class="flow-desc">Scan source, git history, CI logs for hardcoded values</div>
+      </div>
+      <div class="flow-step danger">
+        <div class="flow-icon">⚡</div>
+        <div class="flow-label">Assess</div>
+        <div class="flow-desc">Verify credentials are active. Determine blast radius</div>
+      </div>
+      <div class="flow-step">
+        <div class="flow-icon">🔄</div>
+        <div class="flow-label">Rotate</div>
+        <div class="flow-desc">Immediately invalidate and regenerate all exposed credentials</div>
+      </div>
+      <div class="flow-step safe">
+        <div class="flow-icon">🔒</div>
+        <div class="flow-label">Migrate</div>
+        <div class="flow-desc">Move all secrets to Secrets Manager or SSM Parameter Store</div>
+      </div>
+      <div class="flow-step safe">
+        <div class="flow-icon">✅</div>
+        <div class="flow-label">Validate</div>
+        <div class="flow-desc">Verify services load secrets correctly in all environments</div>
+      </div>
+    </div>
+
+    <div class="code-block" style="margin-top:20px;">
+<span class="comment"># secrets_loader.py — safe secret resolution pattern</span>
+<span class="keyword">import</span> boto3
+<span class="keyword">import</span> json
+
+<span class="keyword">def</span> <span class="fn">get_secret</span>(secret_name: str, region: str = <span class="string">"us-east-1"</span>) -> dict:
+    client = boto3.client(<span class="string">"secretsmanager"</span>, region_name=region)
+    response = client.get_secret_value(SecretId=secret_name)
+    <span class="keyword">return</span> json.loads(response[<span class="string">"SecretString"</span>])
+
+<span class="comment"># Usage — never hardcode credentials</span>
+secrets = <span class="fn">get_secret</span>(<span class="string">"bc1/prod/database"</span>)
+DATABASE_URL = <span class="string">f"postgresql://{secrets['user']}:{secrets['password']}@{secrets['host']}/bc1"</span>
+    </div>
+
+    <div class="code-block">
+<span class="comment"># ssm_config.py — environment config via SSM Parameter Store</span>
+<span class="keyword">import</span> boto3
+
+<span class="keyword">def</span> <span class="fn">get_param</span>(name: str, decrypt: bool = <span class="keyword">True</span>) -> str:
+    ssm = boto3.client(<span class="string">"ssm"</span>)
+    response = ssm.get_parameter(Name=name, WithDecryption=decrypt)
+    <span class="keyword">return</span> response[<span class="string">"Parameter"</span>][<span class="string">"Value"</span>]
+
+<span class="key">SENTRY_DSN</span>     = <span class="fn">get_param</span>(<span class="string">"/bc1/prod/sentry_dsn"</span>)
+<span class="key">CLICKUP_TOKEN</span>  = <span class="fn">get_param</span>(<span class="string">"/bc1/prod/clickup_token"</span>)
+<span class="key">AWS_S3_BUCKET</span>  = <span class="fn">get_param</span>(<span class="string">"/bc1/prod/s3_bucket"</span>)
+    </div>
+  </section>
+
+  <!-- CICD -->
+  <section id="cicd" class="section">
+    <div class="section-header">
+      <div class="section-label">Section 06</div>
+      <div class="section-title">CI / CD & Deployment Health</div>
+      <div class="section-desc">GitHub Actions → Docker → ECS Fargate pipeline with health-gated rollback.</div>
+    </div>
+
+    <div class="pipeline" style="margin-bottom:20px;">
+      <div class="pipeline-stage">
+        <div class="ps-status ok"></div>
+        <div class="ps-name">lint + type check</div>
+        <div class="ps-time">~18s</div>
+        <span class="ps-tag badge green">passing</span>
+      </div>
+      <div class="pipeline-stage">
+        <div class="ps-status warn"></div>
+        <div class="ps-name">test suite</div>
+        <div class="ps-time">~4m 12s</div>
+        <span class="ps-tag badge yellow">19% coverage</span>
+      </div>
+      <div class="pipeline-stage">
+        <div class="ps-status ok"></div>
+        <div class="ps-name">docker build</div>
+        <div class="ps-time">~2m 38s</div>
+        <span class="ps-tag badge green">passing</span>
+      </div>
+      <div class="pipeline-stage">
+        <div class="ps-status ok"></div>
+        <div class="ps-name">push → ECR</div>
+        <div class="ps-time">~45s</div>
+        <span class="ps-tag badge green">passing</span>
+      </div>
+      <div class="pipeline-stage">
+        <div class="ps-status warn"></div>
+        <div class="ps-name">ecs deploy + health gate</div>
+        <div class="ps-time">~3m 10s</div>
+        <span class="ps-tag badge yellow">no rollback configured</span>
+      </div>
+    </div>
+
+    <div class="code-block">
+<span class="comment"># .github/workflows/deploy.yml — health-gated ECS deploy with rollback</span>
+<span class="key">name</span>: <span class="string">Deploy to ECS Fargate</span>
+<span class="key">on</span>:
+  push:
+    branches: [<span class="string">main</span>]
+
+<span class="key">jobs</span>:
+  <span class="key">deploy</span>:
+    runs-on: ubuntu-latest
+    <span class="key">steps</span>:
+      - <span class="key">uses</span>: actions/checkout@v4
+      - <span class="key">name</span>: Configure AWS credentials
+        <span class="key">uses</span>: aws-actions/configure-aws-credentials@v4
+        <span class="key">with</span>: { role-to-assume: ${{ secrets.AWS_ROLE_ARN }} }
+
+      - <span class="key">name</span>: Build and push to ECR
+        <span class="key">run</span>: |
+          docker build -t $IMAGE_URI .
+          docker push $IMAGE_URI
+
+      - <span class="key">name</span>: Deploy to ECS
+        <span class="key">run</span>: |
+          aws ecs update-service --cluster bc1-prod \
+            --service bc1-api --force-new-deployment
+
+      - <span class="key">name</span>: Wait for stable + health check
+        <span class="key">run</span>: |
+          aws ecs wait services-stable \
+            --cluster bc1-prod --services bc1-api
+          <span class="comment"># Auto-rollback on failure via previous task definition</span>
+    </div>
+  </section>
+
+  <!-- OBSERVABILITY -->
+  <section id="observability" class="section">
+    <div class="section-header">
+      <div class="section-label">Section 07</div>
+      <div class="section-title">Observability & Incident Response</div>
+      <div class="section-desc">CloudWatch structured logs, Sentry error tracking, and production incident playbook.</div>
+    </div>
+
+    <div class="grid-2" style="margin-bottom:16px;">
+      <div>
+        <div class="card-title">Live Log Stream — bc1-api (simulated)</div>
+        <div class="log-stream" id="logstream">
+          <div><span class="log-ts">2025-01-14T09:00:01Z</span> <span class="log-info">INFO</span> service=bc1-api env=prod msg="startup complete" port=8000</div>
+          <div><span class="log-ts">2025-01-14T09:00:04Z</span> <span class="log-ok">INFO</span> service=bc1-api msg="health check ok" path=/health</div>
+          <div><span class="log-ts">2025-01-14T09:00:12Z</span> <span class="log-info">INFO</span> service=bc1-api user_id=u_4821 msg="project created" project_id=p_9934</div>
+          <div><span class="log-ts">2025-01-14T09:00:18Z</span> <span class="log-warn">WARN</span> service=bc1-api msg="slow query detected" duration_ms=812 query="ll97_report"</div>
+          <div><span class="log-ts">2025-01-14T09:00:31Z</span> <span class="log-error">ERROR</span> service=bc1-api msg="unhandled exception" path=/api/projects/export error="NullReferenceException"</div>
+          <div><span class="log-ts">2025-01-14T09:00:31Z</span> <span class="log-info">INFO</span> service=sentry event_id=a3f9 msg="error captured and routed"</div>
+          <div><span class="log-ts">2025-01-14T09:00:45Z</span> <span class="log-ok">INFO</span> service=bc1-api msg="health check ok" path=/health</div>
+          <div><span class="log-ts">2025-01-14T09:01:02Z</span> <span class="log-info">INFO</span> service=bc1-api user_id=u_2291 msg="led audit submitted" project_id=p_8812</div>
+          <div><span class="log-ts">2025-01-14T09:01:15Z</span> <span class="log-warn">WARN</span> service=bc1-api msg="rate limit approaching" client=clickup_sync</div>
+          <div><span class="log-ts">2025-01-14T09:01:30Z</span> <span class="log-ok">INFO</span> service=bc1-api msg="health check ok" path=/health</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card-title" style="margin-bottom:12px;">Incident Response Playbook</div>
+        <div class="step-card" style="padding:14px 16px;margin-bottom:8px;">
+          <div class="step-num" style="font-size:16px;color:var(--red);">01</div>
+          <div class="step-content">
+            <h4 style="font-size:12px;">Detect</h4>
+            <p>CloudWatch alarm triggers → SNS → PagerDuty / Slack. Sentry captures exception with full stack trace.</p>
+          </div>
+        </div>
+        <div class="step-card" style="padding:14px 16px;margin-bottom:8px;">
+          <div class="step-num" style="font-size:16px;color:var(--yellow);">02</div>
+          <div class="step-content">
+            <h4 style="font-size:12px;">Assess</h4>
+            <p>Check ECS task health, CloudWatch error rate, recent deploys. Is this a code regression or infra issue?</p>
+          </div>
+        </div>
+        <div class="step-card" style="padding:14px 16px;margin-bottom:8px;">
+          <div class="step-num" style="font-size:16px;color:var(--orange);">03</div>
+          <div class="step-content">
+            <h4 style="font-size:12px;">Contain</h4>
+            <p>If deploy-related: roll back ECS service to previous task definition. If data-related: isolate the flow.</p>
+          </div>
+        </div>
+        <div class="step-card" style="padding:14px 16px;">
+          <div class="step-num" style="font-size:16px;color:var(--green);">04</div>
+          <div class="step-content">
+            <h4 style="font-size:12px;">Resolve & Document</h4>
+            <p>Fix root cause, deploy fix, verify health gates pass, write incident report with timeline and remediation.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DOCS -->
+  <section id="docs" class="section">
+    <div class="section-header">
+      <div class="section-label">Section 08</div>
+      <div class="section-title">Documentation & Handoff Plan</div>
+      <div class="section-desc">Deliverables produced after stabilization — ensuring no future team is left without a foundation.</div>
+    </div>
+
+    <div class="grid-3" style="margin-bottom:20px;">
+      <div class="doc-card">
+        <div class="doc-icon">🗺️</div>
+        <div class="doc-title">Architecture Document</div>
+        <div class="doc-status" style="color:var(--yellow);">In Progress — Week 3</div>
+      </div>
+      <div class="doc-card">
+        <div class="doc-icon">📡</div>
+        <div class="doc-title">Service Map + Boundaries</div>
+        <div class="doc-status" style="color:var(--yellow);">In Progress — Week 2</div>
+      </div>
+      <div class="doc-card">
+        <div class="doc-icon">🚀</div>
+        <div class="doc-title">Onboarding Guide</div>
+        <div class="doc-status" style="color:var(--yellow);">Planned — Week 3</div>
+      </div>
+      <div class="doc-card">
+        <div class="doc-icon">📋</div>
+        <div class="doc-title">OpenAPI / Swagger Contracts</div>
+        <div class="doc-status" style="color:var(--yellow);">In Progress — Week 2</div>
+      </div>
+      <div class="doc-card">
+        <div class="doc-icon">📖</div>
+        <div class="doc-title">Service Runbooks</div>
+        <div class="doc-status" style="color:var(--yellow);">Planned — Week 3</div>
+      </div>
+      <div class="doc-card">
+        <div class="doc-icon">⚠️</div>
+        <div class="doc-title">Risk Backlog</div>
+        <div class="doc-status" style="color:var(--green);">Complete — Day 1</div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="audit-box">
+      <h4>Colombia Team Onboarding Readiness</h4>
+      <p>Once the Week 3 documentation sprint is complete, a new developer should be fully productive within 2 days — not 2 weeks. The onboarding guide will cover: local environment setup from scratch, env variable management via SSM/Secrets Manager, how to run tests and verify the app locally, service ownership map, deploy process walkthrough, and the risk backlog with clear ownership assignments.</p>
+      <p>API contracts will be fully Swagger/OpenAPI documented and ready for the mobile development team to consume for the Android/iOS build. No tribal knowledge required — everything is in the repo.</p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+function show(id, el) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  el.classList.add('active');
+}
+</script>
+</body>
+</html>
